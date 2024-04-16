@@ -1,7 +1,10 @@
 {
   "alg": "RS256",
 
-  "user": {
+  "auth_code_allow": "alpha-key-list",
+  "expiry": 86400000,
+
+  "default_user": {
     "uid": "00000000-0000-0000-0000-000000000000",
     "username": "testuser",
     "email": "hello@world.com",

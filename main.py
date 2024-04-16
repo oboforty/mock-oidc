@@ -1,5 +1,9 @@
+import base64
+import binascii
+import json
 import random
 import string
+from pathlib import Path
 from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request, url_for
@@ -13,8 +17,9 @@ app = Flask(
   static_folder='./public'
 )
 
-auth_code_db = dict()
 client_audiences = set()
+auth_code_db = dict()
+alphakeys_file = CFG.get('alphakeys_file', Path(__file__).parent.joinpath('alphakeys.txt'))
 
 
 @app.route('/', methods=['GET'])
@@ -26,46 +31,90 @@ def index():
     })
 
 
-@app.route('/oauth/authorize')
-def authorization_endpoint():
-    user = CFG['user']
-    redirect_uri = request.args['redirect_uri']
+if CFG['auth_code_allow'] == 'all':
+    @app.route('/oauth/authorize')
+    def authorization_endpoint():
+        user = CFG['default_user']
+        redirect_uri = request.args['redirect_uri']
 
-    url = urlparse(redirect_uri)
-    audience = f'{url.scheme}://{url.netloc}/'
-    client_audiences.add(audience)
+        url = urlparse(redirect_uri)
+        audience = f'{url.scheme}://{url.netloc}/'
+        client_audiences.add(audience)
 
-    auth_code = ''.join(random.choices(string.ascii_letters, k=32))
-    auth_code_db[auth_code] = user['uid'], audience
+        auth_code = ''.join(random.choices(string.ascii_letters, k=32))
+        auth_code_db[auth_code] = user['uid'], audience
 
-    # CSRF & redirect are skipped
-    return f"""<html>
-      <body>
-       <h1>Fetch authorization token:</h1>
-       <p>Hello, {user['username']}</p>
-       
-       <a href="{redirect_uri}?authorization_code={auth_code}">Click here</a>
-
-       <input type="text" onfocus="this.select();" onmouseup="return false;" value="{auth_code}" />
-
-      </body>
-    </html>"""
+        # CSRF & redirect are skipped
+        return f"""<html>
+          <body>
+           <h1>Fetch authorization token:</h1>
+           <p>Hello, {user['username']}</p>
+    
+           <a href="{redirect_uri}?authorization_code={auth_code}">Click here</a>
+    
+           <input type="text" onfocus="this.select();" onmouseup="return false;" value="{auth_code}" />
+    
+          </body>
+        </html>"""
+else:
+    @app.route('/oauth/authorize')
+    def authorization_endpoint():
+        return f"""<html>
+          <body>
+            <h1>Access Denied:</h1>
+            <p>Auth codes were pre-generated for this server, ask one from the administrator of this server.
+            Auth code grant is disabled.</p>
+          </body>
+        </html>"""
 
 
 @app.route('/oauth/token', methods=['POST'])
 def token_endpoint():
-    user = CFG['user']
 
     try:
-        authorization_code = request.args['authorization_code']
-        uid, client_uri = auth_code_db[authorization_code]
-        assert uid == user['uid']
-    except (KeyError, AssertionError):
-        return jsonify(""), 403
+        authorization_code: str = request.args['authorization_code']
+    except KeyError:
+        return jsonify(""), 401
 
-    token = to_jwt(user, issuer=request.url_root, audience=client_uri)
+    if CFG['auth_code_allow'] == 'alpha-key-list':
+        """
+        Read user dict from 2nd part of authorization code
+        """
+        user_alphakey, user_encoded = authorization_code.split('.')
+
+        with open(alphakeys_file) as fh:
+            alphakeys = set(fh.readlines())
+
+        try:
+            alphakeys.remove(user_alphakey+'\n')
+            user = json.loads(base64.b64decode(user_encoded.encode('utf8')))
+            client_uri = user['audience']
+            token_type = 'alpha'
+        except (KeyError, binascii.Error, json.JSONDecodeError):
+            return jsonify(""), 403
+        else:
+            with open(alphakeys_file, 'w') as fh:
+                fh.writelines(alphakeys)
+
+    elif CFG['auth_code_allow'] == 'all':
+        """
+        Accept authorization code at face value, and fetch user from config
+        """
+        user = CFG['default_user']
+        token_type = 'access'
+
+        try:
+            uid, client_uri = auth_code_db[authorization_code]
+            assert uid == user['uid']
+        except (KeyError, AssertionError):
+            return jsonify(""), 403
+    else:
+        raise NotImplemented(CFG['auth_code_allow'])
+
+    token = to_jwt(user, issuer=request.url_root, audience=client_uri, type=token_type)
+
     return jsonify({
-      'access_token': token
+        'access_token': token
     })
 
 
@@ -88,7 +137,7 @@ def oidc_config():
 
     return jsonify({
         "authorization_endpoint": url_for('authorization_endpoint',_external=True),
-        "claims_supported": list(CFG['user'].keys()) + [
+        "claims_supported": [
           "aud", "iss",
           "exp", "iat", "nbf",
           "sub", "scp"

@@ -11,7 +11,7 @@ from config import CFG, _discover_keys
 JWKS: dict[str, list[jwt.algorithms.RSAAlgorithm, jwt.algorithms.RSAAlgorithm]] = _discover_keys()
 
 
-def to_jwt(user, issuer, audience):
+def to_jwt(user, *, issuer: str, audience: str, type: str, expiry=None):
 
     """
     kid - The token must have a header claim that matches the key in the jwks_uri that signed the token.
@@ -32,7 +32,7 @@ def to_jwt(user, issuer, audience):
         'sub': user.pop('uid'),
         'iss': issuer,
         'aud': audience,
-        'exp': now + 3600,
+        'exp': now + (expiry or CFG['expiry']),
         'iat': now,
         'nbf': now,
         'scp': 'profile',
