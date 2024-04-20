@@ -3,12 +3,14 @@ import binascii
 import json
 import random
 import string
+import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request, url_for
 
 from config import CFG
+from cors import Cors
 from issuejwt import verify, to_jwt
 
 app = Flask(
@@ -16,8 +18,9 @@ app = Flask(
   static_url_path='/',
   static_folder='./public'
 )
+cors = Cors(CFG['cors'])
+app.after_request(lambda resp: cors(request, resp))
 
-client_audiences = set()
 auth_code_db = dict()
 alphakeys_file = CFG.get('alphakeys_file', Path(__file__).parent.joinpath('alphakeys.txt'))
 
@@ -27,7 +30,7 @@ def index():
     return jsonify({
         "resp": "Mocked OIDC Server",
         "auth_codes": auth_code_db,
-        "issued_audiences": list(client_audiences)
+        "audience": CFG['audience']
     })
 
 
@@ -39,7 +42,7 @@ if CFG['auth_code_allow'] == 'all':
 
         url = urlparse(redirect_uri)
         audience = f'{url.scheme}://{url.netloc}/'
-        client_audiences.add(audience)
+        # client_audiences.add(audience)
 
         auth_code = ''.join(random.choices(string.ascii_letters, k=32))
         auth_code_db[auth_code] = user['uid'], audience
@@ -70,10 +73,12 @@ else:
 
 @app.route('/oauth/token', methods=['POST'])
 def token_endpoint():
+    if request.is_json:
+        authorization_code: str = request.json.get('code')
+    else:
+        authorization_code: str = request.args.get('authorization_code')
 
-    try:
-        authorization_code: str = request.args['authorization_code']
-    except KeyError:
+    if not authorization_code:
         return jsonify(""), 401
 
     if CFG['auth_code_allow'] == 'alpha-key-list':
@@ -81,20 +86,24 @@ def token_endpoint():
         Read user dict from 2nd part of authorization code
         """
         user_alphakey, user_encoded = authorization_code.split('.')
-
-        with open(alphakeys_file) as fh:
-            alphakeys = set(fh.readlines())
+        is_testing_key = user_alphakey == CFG['testing_alphakey']
 
         try:
-            alphakeys.remove(user_alphakey+'\n')
+            if not is_testing_key:
+                with open(alphakeys_file) as fh:
+                    alphakeys = set(fh.readlines())
+
+                alphakeys.remove(user_alphakey+'\n')
             user = json.loads(base64.b64decode(user_encoded.encode('utf8')))
-            client_uri = user['audience']
+            audience = user.pop('audience', None)
             token_type = 'alpha'
-        except (KeyError, binascii.Error, json.JSONDecodeError):
+
+            if not is_testing_key:
+                with open(alphakeys_file, 'w') as fh:
+                    fh.writelines(alphakeys)
+        except (KeyError, binascii.Error, json.JSONDecodeError) as e:
+            sys.stderr.write(f'Auth error: {e}\n')
             return jsonify(""), 403
-        else:
-            with open(alphakeys_file, 'w') as fh:
-                fh.writelines(alphakeys)
 
     elif CFG['auth_code_allow'] == 'all':
         """
@@ -104,14 +113,15 @@ def token_endpoint():
         token_type = 'access'
 
         try:
-            uid, client_uri = auth_code_db[authorization_code]
+            uid, audience = auth_code_db[authorization_code]
             assert uid == user['uid']
-        except (KeyError, AssertionError):
+        except (KeyError, AssertionError) as e:
+            sys.stderr.write(f'Auth error: {e}\n')
             return jsonify(""), 403
     else:
         raise NotImplemented(CFG['auth_code_allow'])
 
-    token = to_jwt(user, issuer=request.url_root, audience=client_uri, type=token_type)
+    token = to_jwt(user, issuer=request.url_root, audience=audience, type=token_type)
 
     return jsonify({
         'access_token': token
@@ -125,7 +135,7 @@ def userinfo_endpoint():
     except KeyError:
         return "", 401
 
-    if not (user := verify(auth, issuer=request.url_root, audience=list(client_audiences))):
+    if not (user := verify(auth, issuer=request.url_root, audience=CFG['audience'])):
         return "", 403
 
     return jsonify(user)

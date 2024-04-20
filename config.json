@@ -2,6 +2,7 @@
   "alg": "RS256",
 
   "auth_code_allow": "alpha-key-list",
+  "testing_alphakey": "BADA55",
   "expiry": 86400000,
 
   "default_user": {
@@ -9,5 +10,13 @@
     "username": "testuser",
     "email": "hello@world.com",
     "admin": false
-  }
+  },
+  "cors": {
+    "use_defaults": true,
+    "allow": "all",
+    "headers": {}
+  },
+  "audience": [
+    "est:xx", "est:tt", "est:pi", "est:ji", "est:di"
+  ]
 }

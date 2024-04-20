@@ -4,14 +4,14 @@ from issuejwt import to_jwt
 
 print("""
 Game IDs:
-XX - test game
-PI - Piratepoly
-JI - Japanopoly
-DI - Diplomatica
-GEO - Geopoly
+xx - test game
+pi - Piratepoly
+ji - Japanopoly
+di - Diplomatica
+geo - Geopoly
 """)
-username = input("Username:")
 gid = input("Game ID:")
+username = input("Username:")
 assert gid and username
 
 

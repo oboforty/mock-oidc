@@ -53,7 +53,7 @@ def verify(header, issuer, audience):
     try:
         signing_key = JWKS[kid][1]
         data = jwt.decode(token, signing_key, algorithms=[CFG['alg']], audience=audience, issuer=issuer)
-    except (jwt.exceptions.PyJWTError, KeyError):
+    except (jwt.exceptions.PyJWTError, KeyError) as e:
         return None
 
     return data
